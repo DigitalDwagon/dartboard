@@ -1,0 +1,21 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "dartboard"
+version = "0.0.1"
+authors = [
+    {name = "DigitalDragon"}
+]
+description = "Internet Archive upload management tool"
+readme = "README.md"
+requires-python = ">=3.8"
+dependencies = [
+    "internetarchive>=5.0.3",
+    "watchdog"
+]
+
+[project.scripts]
+dartboard = "dartboard:main"
+

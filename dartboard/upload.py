@@ -14,6 +14,7 @@ from dartboard.__version__ import version
 
 
 def upload(config: Config, path: str):
+    path = os.path.normpath(path)
     logging.log(logging.INFO, f"Uploading {path}...")
 
     identifier: str = get_identifier(path)
@@ -35,10 +36,10 @@ def upload(config: Config, path: str):
             metadata["scanner"] = []
         if isinstance(metadata["scanner"], str):
             metadata["scanner"] = [metadata["scanner"]]
-        metadata["scanner"].append(f"dartboard v{version}")
+        metadata["scanner"].append(f"dartboard (v{version})")
 
     if settings.set_upload_state:
-        metadata["upload_state"] = "uploading"
+        metadata["upload-state"] = "uploading"
 
     logging.log(logging.INFO, f"Metadata: {json.dumps(metadata, indent=4)}")
 
@@ -46,7 +47,7 @@ def upload(config: Config, path: str):
 
     logging.log(logging.INFO, f"Found files:")
     for filepath, destination in files_to_upload.items():
-        logging.log(logging.INFO, f"    {path} -> {destination}")
+        logging.log(logging.INFO, f"    {filepath} -> {destination}")
 
     if not files_to_upload.items():
         logging.log(logging.INFO, f"No files to upload!")
@@ -81,14 +82,22 @@ def upload(config: Config, path: str):
     if not wait_for_item(identifier):
         return False
 
+    if settings.set_upload_state:
+        metadata["upload-state"] = "uploaded"
+
     item = internetarchive.get_item(identifier, archive_session=session)
     metadata_changes = {}
     item_metadata = item.metadata
     # diff the metadata
     # keys that are in metadata but not in item_metadata or keys that are present in both, but have different values
     # ignore keys that are only in item_metadata
-    print(item_metadata)
+    #print(item_metadata)
     for key in metadata.keys():
+        if key == "description" and "<a" in metadata[key]:
+            # TODO: IA sanitizes description HTML (eg. with nofollow) so this will result in us always updating the description field...
+            # For now we just skip it
+            continue
+
         if key not in item_metadata:
             metadata_changes[key] = metadata[key]
             continue
@@ -100,6 +109,11 @@ def upload(config: Config, path: str):
 
             if len(value) > len(item_value):
                 metadata_changes[key] = value
+            continue
+
+        if item_metadata[key] != metadata[key]:
+            metadata_changes[key] = metadata[key]
+
 
     # if there are changes, update the metadata
     if metadata_changes:
@@ -113,6 +127,8 @@ def upload(config: Config, path: str):
         tasks = get_tasks(identifier, {"cmd":"derive.php", "history":"0"}, archive_session=session)
         if tasks:
             logging.log(logging.INFO, f"-> Found a derive task ({tasks.pop().task_id}) already running for {identifier} - see https://archive.org/history/{identifier}")
+        else:
+            ""
             item.derive()
 
     logging.log(logging.INFO, f"Success! Upload complete - {identifier} is now available at https://archive.org/details/{identifier}")
@@ -162,8 +178,6 @@ def get_files_to_upload(path: str, item: internetarchive.Item) -> dict[str, str]
     return files
 
 def get_identifier(path: str) -> str:
-    path = os.path.normpath(path)
-
     if not os.path.isdir(path):
         logging.log(logging.ERROR, f"{path} is not a directory")
         return None

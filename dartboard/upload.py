@@ -162,6 +162,8 @@ def get_files_to_upload(path: str, item: internetarchive.Item) -> dict[str, str]
     return files
 
 def get_identifier(path: str) -> str:
+    path = os.path.normpath(path)
+
     if not os.path.isdir(path):
         logging.log(logging.ERROR, f"{path} is not a directory")
         return None

@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "dartboard"
-version = "0.0.1"
+version = "0.1.0"
 authors = [
     {name = "DigitalDragon"}
 ]
@@ -17,5 +17,5 @@ dependencies = [
 ]
 
 [project.scripts]
-dartboard = "dartboard:main"
+dartboard = "dartboard.main:main"
 

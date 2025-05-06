@@ -18,6 +18,8 @@ def main():
                         help="Path to the config file (default: ./config.json)")
     parser.add_argument("path", type=str, nargs="?", default=None,
                         help="Path to the directory to upload")
+    parser.add_argument("--dry-run", dest="dry_run", action="store_true",
+                        help="Run the upload process without actually uploading anything")
     args = parser.parse_args()
 
     if args.path is None:
@@ -28,6 +30,8 @@ def main():
         config_dict = json.loads(config_file.read().replace("\n", ""))
 
     config = Config(**config_dict)
+    if args.dry_run:
+        config.dry_run = True
 
     upload(config, args.path)
 

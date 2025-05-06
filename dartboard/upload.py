@@ -61,6 +61,9 @@ def upload(config: Config, path: str):
             headers["x-archive-size-hint"] = str(get_size(files_to_upload))
 
         logging.log(logging.INFO, f"Uploading {filepath} to {identifier}...")
+        if config.dry_run:
+            logging.log(logging.INFO, f"Dry run - skipping upload")
+            continue
         item.upload(files={destination: filepath},
                     metadata=metadata,
                     queue_derive=False,
@@ -71,6 +74,10 @@ def upload(config: Config, path: str):
                     )
 
     # Final upload completions after all files are uploaded - update the metadata, run derives, etc
+    if config.dry_run:
+        logging.log(logging.INFO, f"Dry run - exiting early! Can't update metadata or derive an item that does not exist.")
+        return True
+
     if not wait_for_item(identifier):
         return False
 

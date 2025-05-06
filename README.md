@@ -28,7 +28,7 @@ dartboard will try to upload to the item with the same identifier as the name of
 If the item already exists, dartboard will try to upload the files to it with or without `__ia_meta.json` being present. If it is present, dartboard WILL attempt to diff the metadata and make the necessary changes once it has finished uploading the new files.
 
 You can also specify dartboard settings for that item with an `__uploader_meta.json` file:
-```json
+```java
 {
   "setUploadState": false, // if enabled, dartboard will set an upload-state:uploading key on the item, and change it to upload-state:uploaded when done
   "setScanner": true, // if disabled, dartboard will not add "dartboard (vX.Y.Z)" to the scanner field

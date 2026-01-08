@@ -16,6 +16,9 @@ dependencies = [
     "dataclasses-json"
 ]
 
+[project.urls]
+repository = "https://github.com/DigitalDwagon/dartboard"
+
 [tool.poetry]
 packages = [
     {include = "dartboard"}

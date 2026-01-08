@@ -3,8 +3,8 @@ requires = ["poetry-core>=2.0.0,<3.0.0"]
 build-backend = "poetry.core.masonry.api"
 
 [project]
-name = "dartboard"
-version = "0.2.0"
+name = "dartboard-ia"
+version = "0.2.1"
 authors = [
     {name = "DigitalDragon"}
 ]
@@ -14,6 +14,11 @@ requires-python = ">=3.8"
 dependencies = [
     "internetarchive>=5.0.3",
     "dataclasses-json"
+]
+
+[tool.poetry]
+packages = [
+    {include = "dartboard"}
 ]
 
 [project.scripts]

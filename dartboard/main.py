@@ -1,6 +1,9 @@
 import argparse
 import json
 import logging
+import os.path
+import re
+from turtle import config_dict
 
 from dartboard.__version__ import version
 from dartboard.config import Config
@@ -26,8 +29,20 @@ def main():
         parser.print_help()
         exit(1)
 
-    with open(args.config_path, "r") as config_file:
-        config_dict = json.loads(config_file.read().replace("\n", ""))
+    config_dict = {}
+
+    if os.path.exists(args.config_path):
+        with open(args.config_path, "r") as config_file:
+            config_dict = json.loads(config_file.read().replace("\n", ""))
+    elif os.path.exists(os.path.expanduser("~/.config/internetarchive/ia.ini")):
+        with open(os.path.expanduser("~/.config/internetarchive/ia.ini"), "r") as f:
+            credentials = f.read()
+            config_dict = {
+                "s3_key": re.search("access = ([^\n]+)", credentials).group(1),
+                "s3_secret": re.search("secret = ([^\n]+)", credentials).group(1)
+            }
+    else:
+        print("Couldn't find credentials. Create a config.json, or run \"ia configure\" if you prefer to use the IA CLI")
 
     config = Config(**config_dict)
     if args.dry_run:

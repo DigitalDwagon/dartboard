@@ -4,7 +4,10 @@ generalized Internet Archive upload target
 dartboard is [available on PyPi](https://pypi.org/project/dartboard-ia) as `dartboard-ia`!
 
 ## Configuration
-To use dartboard, you'll need a `config.json` in the same directory where you run it (or pass the location of it with `--config-path` in your dartboard command).
+There are two ways you can provide dartboard with Internet Archive credentials to be able to upload:
+- If you use the IA CLI (and you've run `ia configure`) dartboard will automatically use those credentials
+- Otherwise, you can create a config json file (see below) and pass the location of it with `--config-path` (default: `./config.json`)
+
 ```json
 {
   "s3_key": "abcdefg",

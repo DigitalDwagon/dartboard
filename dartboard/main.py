@@ -3,11 +3,15 @@ import json
 import logging
 import os.path
 import re
-from turtle import config_dict
+import time
+
+from watchdog.observers import Observer
 
 from dartboard.__version__ import version
 from dartboard.config import Config
 from dartboard.upload import upload
+from dartboard.watch import UploadEventHandler
+
 
 def main():
     logging.basicConfig(level=logging.INFO,
@@ -23,9 +27,14 @@ def main():
                         help="Path to the directory to upload")
     parser.add_argument("--dry-run", dest="dry_run", action="store_true",
                         help="Run the upload process without actually uploading anything")
+    parser.add_argument("--daemon", action="store_true",
+                        help="Run dartboard in daemon mode")
     args = parser.parse_args()
 
-    if args.path is None:
+    if args.daemon and args.path:
+        print("Can't use --daemon and a path at the same time!")
+        exit(1)
+    if args.path is None and not args.daemon:
         parser.print_help()
         exit(1)
 
@@ -48,7 +57,23 @@ def main():
     if args.dry_run:
         config.dry_run = True
 
-    upload(config, args.path)
+    if args.path and not args.daemon:
+        upload(config, args.path)
+    if args.daemon:
+        event_handler = UploadEventHandler(config)
+        observer = Observer()
+        exppath = os.path.abspath(config.staging_directory)
+        print(exppath)
+        observer.schedule(event_handler, exppath, recursive=True)
+        observer.start()
+        try:
+            while True:
+                time.sleep(1)
+        finally:
+            observer.stop()
+            observer.join()
+
+
 
 
 if __name__ == "__main__":

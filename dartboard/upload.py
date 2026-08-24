@@ -12,31 +12,33 @@ from dartboard.config import Config
 from dartboard.items import UploaderMeta
 from dartboard.__version__ import version
 
+item_cache: dict[str, bool] = {}
 
 def upload(config: Config, path: str):
     path = os.path.normpath(path)
     logging.log(logging.INFO, f"Uploading {path}...")
 
-    identifier: str = get_identifier(path)
+    identifier: str | None = get_identifier(path)
     if not identifier:
         return False
     logging.log(logging.INFO, f"Identifier: {identifier} - this item will try to upload to https://archive.org/details/{identifier}")
 
+    if not has_files_to_upload(path):
+        logging.log(logging.INFO, f"Directory has no files to upload.")
+        return False
+
+    if identifier in item_cache and not item_cache[identifier]:
+        logging.log(logging.INFO, f"{identifier} does not exist (cached) and doesn't have a metadata file. Cannot upload.")
+
+
     session: ArchiveSession = get_session({"s3": {"access": config.s3_key, "secret": config.s3_secret}})
     item = internetarchive.get_item(identifier, archive_session=session)
-    metadata = load_metadata(path)
-    settings = load_uploader_settings(path)
+    metadata, settings = load_meta_info(path)
+    item_cache[identifier] = item.exists
 
     if not metadata and not item.exists:
         logging.log(logging.ERROR, f"{identifier} does not exist and doesn't have a metadata file. Cannot upload.")
         return False
-
-    if settings.set_scanner:
-        if "scanner" not in metadata or not metadata["scanner"]:
-            metadata["scanner"] = []
-        if isinstance(metadata["scanner"], str):
-            metadata["scanner"] = [metadata["scanner"]]
-        metadata["scanner"].append(f"dartboard (v{version})")
 
     if settings.set_upload_state:
         metadata["upload-state"] = "uploading"
@@ -54,6 +56,61 @@ def upload(config: Config, path: str):
         return True
 
     uploaded_files: dict[str, str] = {}
+
+    headers: dict[str, str] = {}
+    if settings.send_size_hint:
+        headers["x-archive-size-hint"] = str(get_size(files_to_upload))
+
+    while True:
+        filepath, destination = files_to_upload.popitem()
+
+        logging.log(logging.INFO, f"{identifier} - uploading {filepath} to {destination}...")
+
+        if config.dry_run:
+            logging.log(logging.INFO, f"Dry run - skipping upload")
+        else:
+            _ = item.upload(files={destination: filepath},
+                        metadata=metadata,
+                        queue_derive=False,
+                        headers=headers,
+                        verbose=True,
+                        access_key=config.s3_key,
+                        secret_key=config.s3_secret
+                        )
+            uploaded_files[filepath] = destination
+
+        # if no files to upload, check disk for more files
+        if not files_to_upload:
+            if has_files_to_upload(path, uploaded_files):
+                logging.log(logging.INFO, f"Checking for more files to upload...")
+                files_to_upload = get_files_to_upload(path, item)
+                # remove already uploaded files from the list
+                for filepath in uploaded_files:
+                    if filepath in files_to_upload:
+                        files_to_upload.pop(filepath, None)
+            else:
+                break
+
+    for filepath, destination in uploaded_files.items():
+        # move files to done directory or delete as per config
+        if config.delete_after_upload:
+            logging.log(logging.INFO, f"Deleting {filepath} after upload...")
+            if not config.dry_run:
+                os.remove(filepath)
+        else:
+            done_path = os.path.join(config.done_directory, os.path.relpath(filepath, path))
+            done_dir = os.path.dirname(done_path)
+            if not os.path.exists(done_dir):
+                logging.log(logging.INFO, f"Creating directory {done_dir}...")
+                if not config.dry_run:
+                    os.makedirs(done_dir)
+            logging.log(logging.INFO, f"Moving {filepath} to {done_path} after upload...")
+            if not config.dry_run:
+                os.rename(filepath, done_path)
+
+
+    """
+
 
     for filepath, destination in files_to_upload.items():
         headers = {}
@@ -73,7 +130,7 @@ def upload(config: Config, path: str):
                     access_key=config.s3_key,
                     secret_key=config.s3_secret
                     )
-
+"""
     # Final upload completions after all files are uploaded - update the metadata, run derives, etc
     if config.dry_run:
         logging.log(logging.INFO, f"Dry run - exiting early! Can't update metadata or derive an item that does not exist.")
@@ -133,6 +190,8 @@ def upload(config: Config, path: str):
 
     logging.log(logging.INFO, f"Success! Upload complete - {identifier} is now available at https://archive.org/details/{identifier}")
 
+
+
     return True
 
 
@@ -177,7 +236,24 @@ def get_files_to_upload(path: str, item: internetarchive.Item) -> dict[str, str]
 
     return files
 
-def get_identifier(path: str) -> str:
+def has_files_to_upload(path: str, uploaded_files: dict[str, str] | None = None):
+    for dirpath, dirnames, filenames in os.walk(path):
+        for f in filenames:
+            if f == "__ia_meta.json" or f == "__uploader_meta.json":
+                continue
+            fp = os.path.join(dirpath, f)
+            # skip if it is symbolic link or directory
+            if not os.path.islink(fp) and not os.path.isdir(fp):
+                if uploaded_files:
+                    rel_path = os.path.relpath(fp, path)
+                    rel_path = rel_path.replace(os.path.sep, "/")
+                    abs_path = os.path.abspath(fp)
+                    if abs_path in uploaded_files:
+                        continue
+                return True
+    return False
+
+def get_identifier(path: str) -> str | None:
     if not os.path.isdir(path):
         logging.log(logging.ERROR, f"{path} is not a directory")
         return None
@@ -195,27 +271,34 @@ def get_identifier(path: str) -> str:
 
     return identifier
 
-def load_metadata(path: str) -> dict:
+def load_meta_info(path: str) -> tuple[dict[str, str | list[str]], UploaderMeta]:
+    metadata = {}
+    settings: UploaderMeta = UploaderMeta()
+
     try:
         with open(os.path.join(path, "__ia_meta.json"), "r") as meta_file:
-            metadata = meta_file.read()
-            if metadata:
-                return json.loads(metadata)
-            else:
-                return {}
+            raw_metadata = meta_file.read()
+            if raw_metadata:
+                metadata = json.loads(raw_metadata)
     except FileNotFoundError:
-        return {}
+        pass
 
-def load_uploader_settings(path: str) -> UploaderMeta:
     try:
         with open(os.path.join(path, "__uploader_meta.json"), "r") as meta_file:
             settings_raw = meta_file.read()
             if settings_raw:
-                return UploaderMeta.from_json(settings_raw)
-            else:
-                return UploaderMeta()
+                settings: UploaderMeta =  UploaderMeta.from_json(settings_raw)
     except FileNotFoundError:
-        return UploaderMeta()
+        pass
+
+    if settings.set_scanner:
+        if "scanner" not in metadata or not metadata["scanner"]:
+            metadata["scanner"] = []
+        if isinstance(metadata["scanner"], str):
+            metadata["scanner"] = [metadata["scanner"]]
+        metadata["scanner"].append(f"dartboard (v{version})")
+
+    return metadata, settings
 
 def wait_for_item(identifier: str) -> bool:
     # "borrowed" and modified from the wikiteam3 uploader
@@ -233,4 +316,4 @@ def wait_for_item(identifier: str) -> bool:
 
     if not item.exists:
         logging.log(logging.ERROR, msg=f"IA overloaded, the item is still not ready after {400 * 30} seconds")
-        return False
+    return False

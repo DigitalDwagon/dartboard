@@ -13,7 +13,13 @@ readme = "README.md"
 requires-python = ">=3.8"
 dependencies = [
     "internetarchive>=5.0.3",
-    "dataclasses-json"
+    "dataclasses-json",
+    "watchdog"
+]
+
+[dependency-groups]
+dev = [
+    "pytest"
 ]
 
 [project.urls]

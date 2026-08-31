@@ -5,14 +5,12 @@ import os.path
 import re
 import time
 
-import internetarchive
-from internetarchive import get_tasks, get_session, ArchiveSession
+import internetarchive as ia
 
+from dartboard import cache
 from dartboard.config import Config
 from dartboard.items import UploaderMeta
 from dartboard.__version__ import version
-
-item_cache: dict[str, bool] = {}
 
 def upload(config: Config, path: str):
     path = os.path.normpath(path)
@@ -27,17 +25,11 @@ def upload(config: Config, path: str):
         logging.log(logging.INFO, f"Directory has no files to upload.")
         return False
 
-    if identifier in item_cache and not item_cache[identifier]:
-        logging.log(logging.INFO, f"{identifier} does not exist (cached) and doesn't have a metadata file. Cannot upload.")
-
-
-    session: ArchiveSession = get_session({"s3": {"access": config.s3_key, "secret": config.s3_secret}})
-    item = internetarchive.get_item(identifier, archive_session=session)
     metadata, settings = load_meta_info(path)
-    item_cache[identifier] = item.exists
+    item = cache.get_item(identifier)
 
     if not metadata and not item.exists:
-        logging.log(logging.ERROR, f"{identifier} does not exist and doesn't have a metadata file. Cannot upload.")
+        logging.log(logging.ERROR, f"{identifier} does not exist on IA and doesn't have a metadata file. Cannot upload.")
         return False
 
     if settings.set_upload_state:
@@ -45,17 +37,11 @@ def upload(config: Config, path: str):
 
     logging.log(logging.INFO, f"Metadata: {json.dumps(metadata, indent=4)}")
 
+    # absolute path on disk -> relative path in IA item
     files_to_upload: dict[str, str] = get_files_to_upload(path, item)
-
-    logging.log(logging.INFO, f"Found files:")
-    for filepath, destination in files_to_upload.items():
-        logging.log(logging.INFO, f"    {filepath} -> {destination}")
-
-    if not files_to_upload.items():
-        logging.log(logging.INFO, f"No files to upload!")
-        return True
-
     uploaded_files: dict[str, str] = {}
+
+    logging.log(logging.INFO, f"Files to upload: {json.dumps(files_to_upload, indent=4)}")
 
     headers: dict[str, str] = {}
     if settings.send_size_hint:
@@ -63,40 +49,30 @@ def upload(config: Config, path: str):
 
     while True:
         filepath, destination = files_to_upload.popitem()
-
         logging.log(logging.INFO, f"{identifier} - uploading {filepath} to {destination}...")
 
-        if config.dry_run:
-            logging.log(logging.INFO, f"Dry run - skipping upload")
-        else:
+        if uploaded_files:
+            # cannot send size hint after the first file is uploaded
+            headers.pop("x-archive-size-hint", None)
+
+        if not config.dry_run:
             _ = item.upload(files={destination: filepath},
-                        metadata=metadata,
-                        queue_derive=False,
-                        headers=headers,
-                        verbose=True,
-                        access_key=config.s3_key,
-                        secret_key=config.s3_secret
-                        )
-            uploaded_files[filepath] = destination
+                            metadata=metadata,
+                            queue_derive=False,
+                            headers=headers,
+                            verbose=True,
+                            access_key=config.s3_key,
+                            secret_key=config.s3_secret
+                            )
+        else:
+            logging.log(logging.INFO, f"\tDry run - skipping upload")
 
-        # if no files to upload, check disk for more files
-        if not files_to_upload:
-            if has_files_to_upload(path, uploaded_files):
-                logging.log(logging.INFO, f"Checking for more files to upload...")
-                files_to_upload = get_files_to_upload(path, item)
-                # remove already uploaded files from the list
-                for filepath in uploaded_files:
-                    if filepath in files_to_upload:
-                        files_to_upload.pop(filepath, None)
-            else:
-                break
-
-    for filepath, destination in uploaded_files.items():
-        # move files to done directory or delete as per config
         if config.delete_after_upload:
             logging.log(logging.INFO, f"Deleting {filepath} after upload...")
             if not config.dry_run:
                 os.remove(filepath)
+            else:
+                logging.log(logging.INFO, f"\tDry run - skipping delete")
         else:
             done_path = os.path.join(config.done_directory, os.path.relpath(filepath, path))
             done_dir = os.path.dirname(done_path)
@@ -104,9 +80,27 @@ def upload(config: Config, path: str):
                 logging.log(logging.INFO, f"Creating directory {done_dir}...")
                 if not config.dry_run:
                     os.makedirs(done_dir)
+                else:
+                    logging.log(logging.INFO, f"\tDry run - skipping directory creation")
             logging.log(logging.INFO, f"Moving {filepath} to {done_path} after upload...")
             if not config.dry_run:
                 os.rename(filepath, done_path)
+            else:
+                logging.log(logging.INFO, f"\tDry run - skipping move")
+
+
+
+        uploaded_files[filepath] = destination
+
+        # if no files to upload, check disk for more files
+        if not files_to_upload:
+            logging.log(logging.INFO, f"Checking if any additional files have been added...")
+            files_to_upload = get_files_to_upload(path, item, uploaded_files)
+            logging.log(logging.INFO, f"Found {len(files_to_upload)} additional files to upload.")
+            if not files_to_upload:
+                break
+
+    logging.log(logging.INFO, f"Uploaded files: {json.dumps(uploaded_files, indent=4)}")
 
 
     """
@@ -142,7 +136,7 @@ def upload(config: Config, path: str):
     if settings.set_upload_state:
         metadata["upload-state"] = "uploaded"
 
-    item = internetarchive.get_item(identifier, archive_session=session)
+    item = ia.get_item(identifier, archive_session=cache.session)
     metadata_changes = {}
     item_metadata = item.metadata
     # diff the metadata
@@ -181,7 +175,7 @@ def upload(config: Config, path: str):
     if settings.derive:
         # TODO: check that there is no queued/running derive task already
         logging.log(logging.INFO, f"Deriving {identifier}...")
-        tasks = get_tasks(identifier, {"cmd":"derive.php", "history":"0"}, archive_session=session)
+        tasks = ia.get_tasks(identifier, {"cmd":"derive.php", "history":"0"}, archive_session=cache.session)
         if tasks:
             logging.log(logging.INFO, f"-> Found a derive task ({tasks.pop().task_id}) already running for {identifier} - see https://archive.org/history/{identifier}")
         else:
@@ -201,18 +195,20 @@ def get_size(files: dict[str, str]) -> int:
         size += os.path.getsize(file)
     return size
 
-def get_files_to_upload(path: str, item: internetarchive.Item) -> dict[str, str]:
+def get_files_to_upload(path: str, item: ia.Item, uploaded_files: dict[str, str] | None = None) -> dict[str, str]:
     files: dict[str, str] = {}
     for dirpath, dirnames, filenames in os.walk(path):
         for f in filenames:
             fp = os.path.join(dirpath, f)
             # skip if it is symbolic link
-            if not os.path.islink(fp):
-                # get the relative path
-                rel_path = os.path.relpath(fp, path)
-                rel_path = rel_path.replace(os.path.sep, "/")
-                abs_path = os.path.abspath(fp)
-                files[abs_path] = rel_path
+            if os.path.islink(fp):
+                continue
+
+            # get the relative path
+            rel_path = os.path.relpath(fp, path)
+            rel_path = rel_path.replace(os.path.sep, "/")
+            abs_path = os.path.abspath(fp)
+            files[abs_path] = rel_path
 
     # remove __ia_meta.json and __uploader_meta.json from the list
     for path, destination in list(files.items()):
@@ -223,6 +219,11 @@ def get_files_to_upload(path: str, item: internetarchive.Item) -> dict[str, str]
         return files
 
     for path, destination in list(files.items()):
+        # skip if already uploaded
+        if uploaded_files and path in uploaded_files:
+            files.pop(path, None)
+            continue
+
         ia_file = next((file for file in item.files if file["name"] == destination), None)
 
         if ia_file:

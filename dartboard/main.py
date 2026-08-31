@@ -4,14 +4,15 @@ import logging
 import os.path
 import re
 import time
+import internetarchive as ia
 
 from watchdog.observers import Observer
 
+from dartboard import cache
 from dartboard.__version__ import version
 from dartboard.config import Config
 from dartboard.upload import upload
 from dartboard.watch import UploadEventHandler
-
 
 def main():
     logging.basicConfig(level=logging.INFO,
@@ -56,6 +57,8 @@ def main():
     config = Config(**config_dict)
     if args.dry_run:
         config.dry_run = True
+
+    cache.session = ia.get_session({"s3": {"access": config.s3_key, "secret": config.s3_secret}})
 
     if args.path and not args.daemon:
         upload(config, args.path)

@@ -1,31 +1,78 @@
 import concurrent.futures
+import time
+from concurrent.futures.thread import ThreadPoolExecutor
 from pathlib import Path
+from turtle import st
+from typing import override
 
 from watchdog.events import FileSystemEventHandler, FileSystemEvent
 
+from dartboard.config import config
 from dartboard.upload import upload
 
-in_progress_items: list[str] = []
+in_progress_items: set[str] = set()
+
+
+def find_item_folder(modified_file: str) -> Path | None:
+    """
+    Return the item folder inside staging_directory that contains modified_file.
+    Examples:
+        staging='/a/b/c', modified='/a/b/c/d' -> '/a/b/c/d'
+        staging='/a/b/c', modified='/a/b/c/d/e/f.txt' -> '/a/b/c/d'
+    Returns None if:
+        - modified_file is not under staging_directory
+        - modified_file is the same file as staging_directory
+        - the calculated item folder does not exist
+        - the calculated item folder is not a directory
+    """
+    staging = Path(config.staging_directory).resolve(strict=False)
+    modified = Path(modified_file).resolve(strict=False)
+
+    try:
+        rel = modified.relative_to(staging)
+    except ValueError:
+        # modified_file not in staging_directory
+        return None
+
+    # If identical (relative '.'), no item folder exists
+    if rel == Path('.') or len(rel.parts) == 0:
+        return None
+
+    # staging/<first_component_of_relative_path>
+    item_path = (staging / rel.parts[0]).resolve(strict=False)
+
+    if not item_path.exists() or not item_path.is_dir():
+        return None
+    return item_path
+
+def submit_upload(item_path: Path) -> None:
+    retries = 0
+    while item_path.exists() and item_path.is_dir():
+        retries += 1
+        # Do this in a loop to pick up files uploaded between the end of the "file upload" part of the upload starting
+        # while the metadata changes, derive task, etc are being completed.
+        print(f"try {retries}")
+        time.sleep(config.start_delay)
+        result = upload(str(item_path.absolute()))
+
+        if not result:
+            raise RuntimeError(f"Upload for {item_path!r} failed.")
 
 class UploadEventHandler(FileSystemEventHandler):
-    def __init__(self, config):
-        print("made")
-        self.config = config
-        self.executor = concurrent.futures.ThreadPoolExecutor(max_workers=3)
+    def __init__(self):
+        self.executor: ThreadPoolExecutor = concurrent.futures.ThreadPoolExecutor(max_workers=3)
 
+    @override
     def on_any_event(self, event: FileSystemEvent) -> None:
         print(event)
-        self.item_directory_for_file(event)
-        self.executor.submit()
-
-
-    def item_directory_for_file(self, event: FileSystemEvent) -> Path:
         path = event.dest_path
         if not path:
             path = event.src_path
-        path = Path(path).resolve()
-        staging = Path(self.config.staging_directory).resolve()
-        relative = path.relative_to(staging)
-
-        return staging / relative.parts[0]
+        print(f"path: {path}")
+        item_folder = find_item_folder(path)
+        if not item_folder or item_folder in in_progress_items:
+            return
+        in_progress_items.add(str(item_folder.absolute()))
+        _ = self.executor.submit(submit_upload, item_folder)
+        #self.executor.submit(upload())
 

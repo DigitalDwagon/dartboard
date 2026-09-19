@@ -2,17 +2,60 @@ import hashlib
 import json
 import logging
 import os.path
+from pathlib import Path
 import re
 import time
 
 import internetarchive as ia
+from internetarchive import Item
 
 from dartboard import cache
-from dartboard.config import Config
+from dartboard.config import config
 from dartboard.items import UploaderMeta
 from dartboard.__version__ import version
 
-def upload(config: Config, path: str):
+
+
+def _ia_upload(item: Item, files: dict[str, str], metadata: dict[str, str | list[str]], headers: dict[str, str]) -> None:
+    if config.dry_run:
+        logging.info(f"Dry run - skipping upload of files {files}")
+        return
+
+    result = item.upload(files=files,
+                metadata=metadata,
+                queue_derive=False,
+                headers=headers,
+                verbose=True,
+                delete=config.delete_after_upload,
+                access_key=config.s3_key,
+                secret_key=config.s3_secret)
+
+    logging.info("Result of upload: " + json.dumps(result, indent=4)) # TODO: debug print
+
+def _handle_uploaded_file(itempath: str, filepath: str)-> None:
+    if config.delete_after_upload:
+        if config.dry_run:
+            logging.log(logging.INFO, f"Dry run - skipping delete of {filepath}")
+            return
+        os.remove(filepath)
+        logging.info(f"File {filepath} not deleted after upload. Upload failed?")
+
+    done_path = os.path.join(config.done_directory, os.path.relpath(filepath, itempath))
+    done_dir = os.path.dirname(done_path)
+    if not os.path.exists(done_dir):
+        logging.log(logging.INFO, f"Creating directory {done_dir}...")
+        if not config.dry_run:
+            os.makedirs(done_dir)
+        else:
+            logging.log(logging.INFO, f"\tDry run - skipping directory creation")
+    logging.log(logging.INFO, f"Moving {filepath} to {done_path} after upload...")
+    if config.dry_run:
+        logging.log(logging.INFO, f"\tDry run - skipping move")
+        return
+    os.rename(filepath, done_path)
+
+
+def upload(path: str) -> bool:
     path = os.path.normpath(path)
     logging.log(logging.INFO, f"Uploading {path}...")
 
@@ -55,40 +98,9 @@ def upload(config: Config, path: str):
             # cannot send size hint after the first file is uploaded
             headers.pop("x-archive-size-hint", None)
 
-        if not config.dry_run:
-            _ = item.upload(files={destination: filepath},
-                            metadata=metadata,
-                            queue_derive=False,
-                            headers=headers,
-                            verbose=True,
-                            access_key=config.s3_key,
-                            secret_key=config.s3_secret
-                            )
-        else:
-            logging.log(logging.INFO, f"\tDry run - skipping upload")
-
-        if config.delete_after_upload:
-            logging.log(logging.INFO, f"Deleting {filepath} after upload...")
-            if not config.dry_run:
-                os.remove(filepath)
-            else:
-                logging.log(logging.INFO, f"\tDry run - skipping delete")
-        else:
-            done_path = os.path.join(config.done_directory, os.path.relpath(filepath, path))
-            done_dir = os.path.dirname(done_path)
-            if not os.path.exists(done_dir):
-                logging.log(logging.INFO, f"Creating directory {done_dir}...")
-                if not config.dry_run:
-                    os.makedirs(done_dir)
-                else:
-                    logging.log(logging.INFO, f"\tDry run - skipping directory creation")
-            logging.log(logging.INFO, f"Moving {filepath} to {done_path} after upload...")
-            if not config.dry_run:
-                os.rename(filepath, done_path)
-            else:
-                logging.log(logging.INFO, f"\tDry run - skipping move")
-
-
+        # TODO - what happens when an upload fails? we MUST NOT call _handle_uploaded_file on items that failed to upload
+        _ia_upload(item, {destination: filepath}, metadata, headers)
+        _handle_uploaded_file(path, filepath)
 
         uploaded_files[filepath] = destination
 
@@ -182,10 +194,15 @@ def upload(config: Config, path: str):
             ""
             item.derive()
 
+    # Now that we are done, the item meta and uploader meta should be cleaned up with the uploaded files
+    _handle_uploaded_file(path, "__ia_meta.json")
+    _handle_uploaded_file(path, "__uploader_meta.json")
+
+    if os.path.exists(path) and os.path.isdir(path) and any(Path(path).iterdir()):
+        # Clean up empty leftover directory
+        os.rmdir(path)
+
     logging.log(logging.INFO, f"Success! Upload complete - {identifier} is now available at https://archive.org/details/{identifier}")
-
-
-
     return True
 
 
@@ -281,6 +298,13 @@ def load_meta_info(path: str) -> tuple[dict[str, str | list[str]], UploaderMeta]
             raw_metadata = meta_file.read()
             if raw_metadata:
                 metadata = json.loads(raw_metadata)
+
+            if settings.set_scanner:
+                if "scanner" not in metadata or not metadata["scanner"]:
+                    metadata["scanner"] = []
+                if isinstance(metadata["scanner"], str):
+                    metadata["scanner"] = [metadata["scanner"]]
+                metadata["scanner"].append(f"dartboard (v{version})")
     except FileNotFoundError:
         pass
 
@@ -292,18 +316,13 @@ def load_meta_info(path: str) -> tuple[dict[str, str | list[str]], UploaderMeta]
     except FileNotFoundError:
         pass
 
-    if settings.set_scanner:
-        if "scanner" not in metadata or not metadata["scanner"]:
-            metadata["scanner"] = []
-        if isinstance(metadata["scanner"], str):
-            metadata["scanner"] = [metadata["scanner"]]
-        metadata["scanner"].append(f"dartboard (v{version})")
+
 
     return metadata, settings
 
 def wait_for_item(identifier: str) -> bool:
     # "borrowed" and modified from the wikiteam3 uploader
-    item = internetarchive.get_item(identifier)
+    item = ia.get_item(identifier)
     tries = 400
     for tries_left in range(tries, 0, -1):
         if item.exists:
@@ -313,7 +332,7 @@ def wait_for_item(identifier: str) -> bool:
         if tries < 395:
             logging.log(logging.INFO, msg=f"Is IA overloaded? Still waiting for item to be created ({tries_left} tries left)  ...")
         time.sleep(30)
-        item = internetarchive.get_item(identifier)
+        item = ia.get_item(identifier)
 
     if not item.exists:
         logging.log(logging.ERROR, msg=f"IA overloaded, the item is still not ready after {400 * 30} seconds")

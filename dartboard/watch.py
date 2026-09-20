@@ -1,4 +1,5 @@
 import concurrent.futures
+import threading
 import time
 from concurrent.futures.thread import ThreadPoolExecutor
 from pathlib import Path
@@ -12,6 +13,7 @@ from dartboard.upload import upload
 
 in_progress_items: set[str] = set()
 
+lock = threading.Lock()
 
 def find_item_folder(modified_file: str) -> Path | None:
     """
@@ -64,15 +66,16 @@ class UploadEventHandler(FileSystemEventHandler):
 
     @override
     def on_any_event(self, event: FileSystemEvent) -> None:
-        print(event)
-        path = event.dest_path
-        if not path:
-            path = event.src_path
-        print(f"path: {path}")
-        item_folder = find_item_folder(path)
-        if not item_folder or item_folder in in_progress_items:
-            return
-        in_progress_items.add(str(item_folder.absolute()))
-        _ = self.executor.submit(submit_upload, item_folder)
-        #self.executor.submit(upload())
+        with lock:
+            print(event)
+            path = event.dest_path
+            if not path:
+                path = event.src_path
+            print(f"path: {path}")
+            item_folder = find_item_folder(path)
+            if not item_folder or str(item_folder.absolute()) in in_progress_items:
+                return
+            in_progress_items.add(str(item_folder.absolute()))
+            _ = self.executor.submit(submit_upload, item_folder)
+            #self.executor.submit(upload())
 

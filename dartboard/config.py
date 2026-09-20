@@ -39,4 +39,12 @@ def load_config(config_path: str) -> None:
             "Couldn't find credentials. Create a config.json, or run \"ia configure\" if you prefer to use the IA CLI")
 
     global config
-    config = Config(**config_dict)
+    # Update the existing config object instead of rebinding the name.
+    # This ensures modules that did `from dartboard.config import config`
+    # see the updated values.
+    for key, value in config_dict.items():
+        if hasattr(config, key):
+            setattr(config, key, value)
+        else:
+            # ignore unknown keys in the config file
+            continue

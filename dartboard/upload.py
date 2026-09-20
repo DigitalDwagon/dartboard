@@ -17,30 +17,72 @@ from dartboard.__version__ import version
 
 
 def _ia_upload(item: Item, files: dict[str, str], metadata: dict[str, str | list[str]], headers: dict[str, str]) -> None:
+    """Upload wrapper"""
     if config.dry_run:
         logging.info(f"Dry run - skipping upload of files {files}")
         return
 
-    result = item.upload(files=files,
-                metadata=metadata,
-                queue_derive=False,
-                headers=headers,
-                verbose=True,
-                delete=config.delete_after_upload,
-                access_key=config.s3_key,
-                secret_key=config.s3_secret)
+    for remote_name, local_path in files.items():
+        try:
+            exists = os.path.exists(local_path)
+            size = os.path.getsize(local_path) if exists else None
+        except Exception as ex:
+            exists = False
+            size = None
+            logging.debug(f"Failed to stat file {local_path}: {ex}")
+        logging.debug(f"Upload mapping -> remote='{remote_name}' local='{local_path}' exists={exists} size={size}")
 
-    logging.info("Result of upload: " + json.dumps(result, indent=4)) # TODO: debug print
+    try:
+        result = item.upload(files=files,
+                             metadata=metadata,
+                             queue_derive=False,
+                             headers=headers,
+                             verbose=True,
+                             delete=config.delete_after_upload,
+                             access_key=config.s3_key,
+                             secret_key=config.s3_secret)
+    except Exception:
+        logging.exception("Exception raised during item.upload()")
+        raise
 
-def _handle_uploaded_file(itempath: str, filepath: str)-> None:
+    # Safely log result/responses
+    try:
+        if isinstance(result, (list, tuple)):
+            for r in result:
+                try:
+                    status = getattr(r, "status_code", None)
+                    text = getattr(r, "text", None)
+                    logging.info(f"Upload response: status={status} len_text={(len(text) if text else 0)}")
+                except Exception:
+                    logging.debug(f"Upload response (repr): {repr(r)}")
+        else:
+            # Some versions return a dict or other object
+            try:
+                logging.info("Result of upload: %s", json.dumps(result, indent=4))
+            except Exception:
+                logging.info(f"Result of upload (repr): {repr(result)}")
+    except Exception:
+        logging.debug("Failed to log upload result cleanly", exc_info=True)
+
+def _handle_uploaded_file(itempath: str, filepath: str, identifier: str)-> None:
+    # filepath may be an absolute path (normal uploads) or a relative path
+    # (cleanup calls pass just the filename like "__ia_meta.json"). Resolve it
+    # relative to the itempath when necessary.
+    src = filepath if os.path.isabs(filepath) else os.path.join(itempath, filepath)
+
     if config.delete_after_upload:
         if config.dry_run:
-            logging.log(logging.INFO, f"Dry run - skipping delete of {filepath}")
+            logging.log(logging.INFO, f"Dry run - skipping delete of {src}")
             return
-        os.remove(filepath)
-        logging.info(f"File {filepath} not deleted after upload. Upload failed?")
+        try:
+            os.remove(src)
+            logging.info(f"Deleted file {src} after upload.")
+        except FileNotFoundError:
+            logging.debug(f"File to delete not found: {src}")
+        return
 
-    done_path = os.path.join(config.done_directory, os.path.relpath(filepath, itempath))
+    rel = os.path.relpath(src, itempath)
+    done_path = os.path.join(os.path.join(config.done_directory, identifier), rel)
     done_dir = os.path.dirname(done_path)
     if not os.path.exists(done_dir):
         logging.log(logging.INFO, f"Creating directory {done_dir}...")
@@ -48,11 +90,15 @@ def _handle_uploaded_file(itempath: str, filepath: str)-> None:
             os.makedirs(done_dir)
         else:
             logging.log(logging.INFO, f"\tDry run - skipping directory creation")
-    logging.log(logging.INFO, f"Moving {filepath} to {done_path} after upload...")
+    logging.log(logging.INFO, f"Moving {src} to {done_path} after upload...")
     if config.dry_run:
         logging.log(logging.INFO, f"\tDry run - skipping move")
         return
-    os.rename(filepath, done_path)
+    try:
+        os.rename(src, done_path)
+    except FileNotFoundError:
+        # log at debug so we don't spam ERROR for expected missing cleanup files
+        logging.debug(f"File to move not found: {src}")
 
 
 def upload(path: str) -> bool:
@@ -100,7 +146,7 @@ def upload(path: str) -> bool:
 
         # TODO - what happens when an upload fails? we MUST NOT call _handle_uploaded_file on items that failed to upload
         _ia_upload(item, {destination: filepath}, metadata, headers)
-        _handle_uploaded_file(path, filepath)
+        _handle_uploaded_file(path, filepath, identifier)
 
         uploaded_files[filepath] = destination
 
@@ -195,12 +241,25 @@ def upload(path: str) -> bool:
             item.derive()
 
     # Now that we are done, the item meta and uploader meta should be cleaned up with the uploaded files
-    _handle_uploaded_file(path, "__ia_meta.json")
-    _handle_uploaded_file(path, "__uploader_meta.json")
+    try:
+        _handle_uploaded_file(path, "__ia_meta.json", identifier)
+        _handle_uploaded_file(path, "__uploader_meta.json", identifier)
+    except Exception:
+        logging.exception("Exception cleaning up __ files: ")
 
-    if os.path.exists(path) and os.path.isdir(path) and any(Path(path).iterdir()):
-        # Clean up empty leftover directory
-        os.rmdir(path)
+    # Remove any empty directories left behind (including the base directory if empty)
+    logging.log(logging.INFO, "Cleaning up empty directories...")
+    if config.dry_run:
+        logging.log(logging.INFO, "\tDry run - skipping directory removals")
+    else:
+        # Walk bottom-up so child directories are removed before parents
+        for dirpath, dirnames, filenames in os.walk(path, topdown=False):
+            try:
+                if not os.listdir(dirpath):
+                    os.rmdir(dirpath)
+                    logging.log(logging.INFO, f"Removed empty directory {dirpath}")
+            except Exception:
+                logging.debug(f"Failed to remove directory {dirpath}", exc_info=True)
 
     logging.log(logging.INFO, f"Success! Upload complete - {identifier} is now available at https://archive.org/details/{identifier}")
     return True

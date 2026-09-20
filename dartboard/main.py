@@ -19,7 +19,7 @@ def main():
     logging.basicConfig(level=logging.INFO,
                         format='%(asctime)s | %(message)s',
                         datefmt='%Y-%m-%d %H:%M:%S')
-    logging.log(logging.INFO, "Dartboard is loading...")
+    logging.info("Dartboard is loading...")
 
 
     parser = argparse.ArgumentParser(description=f"dartboard (v{version})")

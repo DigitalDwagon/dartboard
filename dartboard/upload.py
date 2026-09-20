@@ -72,7 +72,7 @@ def _handle_uploaded_file(itempath: Path, filepath: str, identifier: str)-> None
 
     if config.delete_after_upload:
         if config.dry_run:
-            logging.log(logging.INFO, f"Dry run - skipping delete of {src}")
+            logging.info(f"Dry run - skipping delete of {src}")
             return
         try:
             os.remove(src)
@@ -85,14 +85,14 @@ def _handle_uploaded_file(itempath: Path, filepath: str, identifier: str)-> None
     done_path = os.path.join(os.path.join(config.done_directory, identifier), rel)
     done_dir = os.path.dirname(done_path)
     if not os.path.exists(done_dir):
-        logging.log(logging.INFO, f"Creating directory {done_dir}...")
+        logging.info(f"Creating directory {done_dir}...")
         if not config.dry_run:
             os.makedirs(done_dir)
         else:
-            logging.log(logging.INFO, f"\tDry run - skipping directory creation")
-    logging.log(logging.INFO, f"Moving {src} to {done_path} after upload...")
+            logging.info(f"\tDry run - skipping directory creation")
+    logging.info(f"Moving {src} to {done_path} after upload...")
     if config.dry_run:
-        logging.log(logging.INFO, f"\tDry run - skipping move")
+        logging.info(f"\tDry run - skipping move")
         return
     try:
         os.rename(src, done_path)
@@ -102,34 +102,34 @@ def _handle_uploaded_file(itempath: Path, filepath: str, identifier: str)-> None
 
 
 def upload(path: Path) -> bool:
-    logging.log(logging.INFO, f"Uploading {path}...")
+    logging.info(f"Uploading {path}...")
 
     identifier: str | None = get_identifier(path)
     if not identifier:
         return False
-    logging.log(logging.INFO, f"Identifier: {identifier} - this item will try to upload to https://archive.org/details/{identifier}")
+    logging.info(f"Identifier: {identifier} - this item will try to upload to https://archive.org/details/{identifier}")
 
     if not has_files_to_upload(path):
-        logging.log(logging.INFO, f"Directory has no files to upload.")
+        logging.info(f"Directory has no files to upload.")
         return False
 
     metadata, settings = load_meta_info(path)
     item = cache.get_item(identifier)
 
     if not metadata and not item.exists:
-        logging.log(logging.ERROR, f"{identifier} does not exist on IA and doesn't have a metadata file. Cannot upload.")
+        logging.error(f"{identifier} does not exist on IA and doesn't have a metadata file. Cannot upload.")
         return False
 
     if settings.set_upload_state:
         metadata["upload-state"] = "uploading"
 
-    logging.log(logging.INFO, f"Metadata: {json.dumps(metadata, indent=4)}")
+    logging.info(f"Metadata: {json.dumps(metadata, indent=4)}")
 
     # absolute path on disk -> relative path in IA item
     files_to_upload: dict[str, str] = get_files_to_upload(path, item)
     uploaded_files: dict[str, str] = {}
 
-    logging.log(logging.INFO, f"Files to upload: {json.dumps(files_to_upload, indent=4)}")
+    logging.info(f"Files to upload: {json.dumps(files_to_upload, indent=4)}")
 
     headers: dict[str, str] = {}
     if settings.send_size_hint:
@@ -137,7 +137,7 @@ def upload(path: Path) -> bool:
 
     while True:
         filepath, destination = files_to_upload.popitem()
-        logging.log(logging.INFO, f"{identifier} - uploading {filepath} to {destination}...")
+        logging.info(f"{identifier} - uploading {filepath} to {destination}...")
 
         if uploaded_files:
             # cannot send size hint after the first file is uploaded
@@ -151,17 +151,17 @@ def upload(path: Path) -> bool:
 
         # if no files to upload, check disk for more files
         if not files_to_upload:
-            logging.log(logging.INFO, f"Checking if any additional files have been added...")
+            logging.info(f"Checking if any additional files have been added...")
             files_to_upload = get_files_to_upload(path, item, uploaded_files)
-            logging.log(logging.INFO, f"Found {len(files_to_upload)} additional files to upload.")
+            logging.info(f"Found {len(files_to_upload)} additional files to upload.")
             if not files_to_upload:
                 break
 
-    logging.log(logging.INFO, f"Uploaded files: {json.dumps(uploaded_files, indent=4)}")
+    logging.info(f"Uploaded files: {json.dumps(uploaded_files, indent=4)}")
 
     # Final upload completions after all files are uploaded - update the metadata, run derives, etc
     if config.dry_run:
-        logging.log(logging.INFO, f"Dry run - exiting early! Can't update metadata or derive an item that does not exist.")
+        logging.info(f"Dry run - exiting early! Can't update metadata or derive an item that does not exist.")
         return True
 
     if not wait_for_item(identifier):
@@ -202,16 +202,16 @@ def upload(path: Path) -> bool:
 
     # if there are changes, update the metadata
     if metadata_changes:
-        logging.log(logging.INFO, f"Updating metadata for {identifier}...")
-        logging.log(logging.INFO, f"Metadata changes: {json.dumps(metadata_changes, indent=4)}")
+        logging.info(f"Updating metadata for {identifier}...")
+        logging.info(f"Metadata changes: {json.dumps(metadata_changes, indent=4)}")
         item.modify_metadata(metadata_changes)
 
     if settings.derive:
         # TODO: check that there is no queued/running derive task already
-        logging.log(logging.INFO, f"Deriving {identifier}...")
+        logging.info(f"Deriving {identifier}...")
         tasks = ia.get_tasks(identifier, {"cmd":"derive.php", "history":"0"}, archive_session=cache.session)
         if tasks:
-            logging.log(logging.INFO, f"-> Found a derive task ({tasks.pop().task_id}) already running for {identifier} - see https://archive.org/history/{identifier}")
+            logging.info(f"-> Found a derive task ({tasks.pop().task_id}) already running for {identifier} - see https://archive.org/history/{identifier}")
         else:
             ""
             item.derive()
@@ -224,20 +224,20 @@ def upload(path: Path) -> bool:
         logging.exception("Exception cleaning up __ files: ")
 
     # Remove any empty directories left behind (including the base directory if empty)
-    logging.log(logging.INFO, "Cleaning up empty directories...")
+    logging.info("Cleaning up empty directories...")
     if config.dry_run:
-        logging.log(logging.INFO, "\tDry run - skipping directory removals")
+        logging.info("\tDry run - skipping directory removals")
     else:
         # Walk bottom-up so child directories are removed before parents
         for dirpath, dirnames, filenames in os.walk(path, topdown=False):
             try:
                 if not os.listdir(dirpath):
                     os.rmdir(dirpath)
-                    logging.log(logging.INFO, f"Removed empty directory {dirpath}")
+                    logging.info(f"Removed empty directory {dirpath}")
             except Exception:
                 logging.debug(f"Failed to remove directory {dirpath}", exc_info=True)
 
-    logging.log(logging.INFO, f"Success! Upload complete - {identifier} is now available at https://archive.org/details/{identifier}")
+    logging.info(f"Success! Upload complete - {identifier} is now available at https://archive.org/details/{identifier}")
     return True
 
 
@@ -280,7 +280,7 @@ def get_files_to_upload(path: Path, item: ia.Item, uploaded_files: dict[str, str
 
         if ia_file:
             if ia_file["md5"] == hashlib.md5(open(path, "rb").read()).hexdigest():
-                logging.log(logging.INFO, f"{destination} already exists in {item.identifier}. Skipping...")
+                logging.info(f"{destination} already exists in {item.identifier}. Skipping...")
                 # remove the file from the list
                 files.pop(path, None)
                 continue
@@ -308,18 +308,18 @@ def has_files_to_upload(path: Path, uploaded_files: dict[str, str] | None = None
 
 def get_identifier(path: Path) -> str | None:
     if not path.is_dir():
-        logging.log(logging.ERROR, f"{path} is not a directory")
+        logging.error(f"{path} is not a directory")
         return None
 
     identifier: str = path.name
 
     if not identifier:
-        logging.log(logging.ERROR, f"{path} does not have an identifier")
+        logging.error(f"{path} does not have an identifier")
         return None
 
     # identifier validity: https://archive.org/developers/metadata-schema/index.html#archive-org-identifiers
     if not re.match(r"^[a-zA-Z0-9-_.]{5,100}$", identifier):
-        logging.log(logging.ERROR, f"{identifier} is not a valid identifier. Identifiers should be 5-100 characters long and can only contain letters, numbers, dashes, underscores, and periods.")
+        logging.error(f"{identifier} is not a valid identifier. Identifiers should be 5-100 characters long and can only contain letters, numbers, dashes, underscores, and periods.")
         return None
 
     return identifier
@@ -363,12 +363,12 @@ def wait_for_item(identifier: str) -> bool:
         if item.exists:
             return True
 
-        logging.log(logging.INFO, msg=f"Waiting for the item to be created... ({tries_left} tries left)  ...")
+        logging.info(msg=f"Waiting for the item to be created... ({tries_left} tries left)  ...")
         if tries < 395:
-            logging.log(logging.INFO, msg=f"Is IA overloaded? Still waiting for item to be created ({tries_left} tries left)  ...")
+            logging.info(msg=f"Is IA overloaded? Still waiting for item to be created ({tries_left} tries left)  ...")
         time.sleep(30)
         item = ia.get_item(identifier)
 
     if not item.exists:
-        logging.log(logging.ERROR, msg=f"IA overloaded, the item is still not ready after {400 * 30} seconds")
+        logging.error(msg=f"IA overloaded, the item is still not ready after {400 * 30} seconds")
     return False

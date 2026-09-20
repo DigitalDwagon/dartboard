@@ -64,7 +64,7 @@ def _ia_upload(item: Item, files: dict[str, str], metadata: dict[str, str | list
     except Exception:
         logging.debug("Failed to log upload result cleanly", exc_info=True)
 
-def _handle_uploaded_file(itempath: str, filepath: str, identifier: str)-> None:
+def _handle_uploaded_file(itempath: Path, filepath: str, identifier: str)-> None:
     # filepath may be an absolute path (normal uploads) or a relative path
     # (cleanup calls pass just the filename like "__ia_meta.json"). Resolve it
     # relative to the itempath when necessary.
@@ -101,8 +101,7 @@ def _handle_uploaded_file(itempath: str, filepath: str, identifier: str)-> None:
         logging.debug(f"File to move not found: {src}")
 
 
-def upload(path: str) -> bool:
-    path = os.path.normpath(path)
+def upload(path: Path) -> bool:
     logging.log(logging.INFO, f"Uploading {path}...")
 
     identifier: str | None = get_identifier(path)
@@ -160,29 +159,6 @@ def upload(path: str) -> bool:
 
     logging.log(logging.INFO, f"Uploaded files: {json.dumps(uploaded_files, indent=4)}")
 
-
-    """
-
-
-    for filepath, destination in files_to_upload.items():
-        headers = {}
-
-        if settings.send_size_hint and not uploaded_files:
-            headers["x-archive-size-hint"] = str(get_size(files_to_upload))
-
-        logging.log(logging.INFO, f"Uploading {filepath} to {identifier}...")
-        if config.dry_run:
-            logging.log(logging.INFO, f"Dry run - skipping upload")
-            continue
-        item.upload(files={destination: filepath},
-                    metadata=metadata,
-                    queue_derive=False,
-                    headers=headers,
-                    verbose=True,
-                    access_key=config.s3_key,
-                    secret_key=config.s3_secret
-                    )
-"""
     # Final upload completions after all files are uploaded - update the metadata, run derives, etc
     if config.dry_run:
         logging.log(logging.INFO, f"Dry run - exiting early! Can't update metadata or derive an item that does not exist.")
@@ -271,7 +247,7 @@ def get_size(files: dict[str, str]) -> int:
         size += os.path.getsize(file)
     return size
 
-def get_files_to_upload(path: str, item: ia.Item, uploaded_files: dict[str, str] | None = None) -> dict[str, str]:
+def get_files_to_upload(path: Path, item: ia.Item, uploaded_files: dict[str, str] | None = None) -> dict[str, str]:
     files: dict[str, str] = {}
     for dirpath, dirnames, filenames in os.walk(path):
         for f in filenames:
@@ -313,7 +289,7 @@ def get_files_to_upload(path: str, item: ia.Item, uploaded_files: dict[str, str]
 
     return files
 
-def has_files_to_upload(path: str, uploaded_files: dict[str, str] | None = None):
+def has_files_to_upload(path: Path, uploaded_files: dict[str, str] | None = None):
     for dirpath, dirnames, filenames in os.walk(path):
         for f in filenames:
             if f == "__ia_meta.json" or f == "__uploader_meta.json":
@@ -330,12 +306,12 @@ def has_files_to_upload(path: str, uploaded_files: dict[str, str] | None = None)
                 return True
     return False
 
-def get_identifier(path: str) -> str | None:
-    if not os.path.isdir(path):
+def get_identifier(path: Path) -> str | None:
+    if not path.is_dir():
         logging.log(logging.ERROR, f"{path} is not a directory")
         return None
 
-    identifier: str = os.path.basename(path)
+    identifier: str = path.name
 
     if not identifier:
         logging.log(logging.ERROR, f"{path} does not have an identifier")
@@ -348,12 +324,12 @@ def get_identifier(path: str) -> str | None:
 
     return identifier
 
-def load_meta_info(path: str) -> tuple[dict[str, str | list[str]], UploaderMeta]:
+def load_meta_info(path: Path) -> tuple[dict[str, str | list[str]], UploaderMeta]:
     metadata = {}
     settings: UploaderMeta = UploaderMeta()
 
     try:
-        with open(os.path.join(path, "__ia_meta.json"), "r") as meta_file:
+        with open(path / "__ia_meta.json", "r") as meta_file:
             raw_metadata = meta_file.read()
             if raw_metadata:
                 metadata = json.loads(raw_metadata)

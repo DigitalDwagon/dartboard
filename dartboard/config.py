@@ -8,16 +8,18 @@ class Config:
     s3_key: str = ""
     s3_secret: str = ""
 
+    dry_run: bool = False # Don't upload. Not compatible with daemon mode.
+    delete_after_upload: bool = False # Delete files after upload
+
+    # DAEMON MODE SETTINGS:
     staging_directory: str = "./dartboard-staging"
-    working_directory: str = "./dartboard-uploading"
+    failure_directory: str = "./dartboard-failed"
     done_directory: str = "./dartboard-done"
 
-    dry_run: bool = False
-    delete_after_upload: bool = False
+    start_delay: int = 5 # Allow some time for additional file changes to be made before trying to start the upload.
+    max_retries: int = 3 # Maximum number of tries for each individual file to upload before moving the item to ./dartboard-failed
 
-    start_delay: int = 5 # In daemon mode, allow some time for additional file changes to be made before trying to start the upload.
-    max_retries: int = 3
-
+    scan_interval: int = 3600 # How often to check the disk and start jobs. This will pick up jobs that fail, etc.
 
 config: Config = Config()
 

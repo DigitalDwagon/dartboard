@@ -2,6 +2,7 @@ import hashlib
 import json
 import logging
 import os.path
+import shutil
 from pathlib import Path
 import re
 import time
@@ -14,6 +15,23 @@ from dartboard.config import config
 from dartboard.items import UploaderMeta
 from dartboard.__version__ import version
 
+# the number of times that an item (keyed by identifier) has failed to upload
+item_failures: dict[str, int] = {}
+
+def _failed_item(identifier: str):
+    if config.max_retries < 0 or item_failures.get(identifier, 0) < config.max_retries:
+        return
+
+    logging.error(f"Item {identifier} has failed to upload {item_failures.get(identifier, 0)} times. Marking it failed!")
+
+    staging_dir = Path(config.staging_directory)
+    failure_dir = Path(config.failure_directory)
+    item_dir = staging_dir / identifier
+
+    if not item_dir.exists() and not item_dir.is_dir():
+        raise RuntimeError("Trying to fail an item, but the item path does not exist or is not a directory?")
+
+    shutil.move(staging_dir, failure_dir)
 
 
 def _ia_upload(item: Item, files: dict[str, str], metadata: dict[str, str | list[str]], headers: dict[str, str]) -> None:
@@ -42,6 +60,9 @@ def _ia_upload(item: Item, files: dict[str, str], metadata: dict[str, str | list
                              access_key=config.s3_key,
                              secret_key=config.s3_secret)
     except Exception:
+        item_failures[item.identifier] = item_failures.get(item.identifier, 0) + 1
+        _failed_item(item.identifier)
+
         logging.exception("Exception raised during item.upload()")
         raise
 

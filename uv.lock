@@ -206,7 +206,7 @@ wheels = [
 
 [[package]]
 name = "dartboard-ia"
-version = "0.2.2"
+version = "1.0.0a1"
 source = { editable = "." }
 dependencies = [
     { name = "dataclasses-json" },

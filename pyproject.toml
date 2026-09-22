@@ -4,7 +4,7 @@ build-backend = "uv_build"
 
 [project]
 name = "dartboard-ia"
-version = "0.2.2"
+version = "1.0.0a1"
 authors = [
     {name = "DigitalDragon"}
 ]

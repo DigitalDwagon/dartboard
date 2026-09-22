@@ -3,3 +3,5 @@
 config.json
 dartboard-staging
 dartboard-done
+/dist
+.python-version

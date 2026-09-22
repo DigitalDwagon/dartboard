@@ -1,0 +1,18 @@
+when:
+  - event: push
+  - event: pull_request
+  - event: manual
+
+matrix:
+  PYTHON_VERSION:
+    - 3.12
+    - 3.13
+    - 3.14
+
+steps:
+  - name: test
+    image: python:${PYTHON_VERSION}
+    commands:
+      - python -m pip install --upgrade pip uv
+      - uv sync --python "${PYTHON_VERSION}"
+      - uv run dartboard --help

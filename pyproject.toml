@@ -1,6 +1,6 @@
 [build-system]
-requires = ["poetry-core>=2.0.0,<3.0.0"]
-build-backend = "poetry.core.masonry.api"
+requires = ["uv_build>=0.12.17,<1.0.0"]
+build-backend = "uv_build"
 
 [project]
 name = "dartboard-ia"
@@ -13,16 +13,21 @@ readme = "README.md"
 requires-python = ">=3.8"
 dependencies = [
     "internetarchive>=5.0.3",
-    "dataclasses-json"
+    "dataclasses-json",
+    "watchdog"
+]
+
+[dependency-groups]
+dev = [
+    "pytest"
 ]
 
 [project.urls]
 repository = "https://github.com/DigitalDwagon/dartboard"
 
-[tool.poetry]
-packages = [
-    {include = "dartboard"}
-]
+[tool.uv.build-backend]
+module-name = ["dartboard"]
+module-root = ""
 
 [project.scripts]
 dartboard = "dartboard.main:main"

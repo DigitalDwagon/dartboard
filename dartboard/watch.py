@@ -57,7 +57,7 @@ def scan_staging_directory(executor: ThreadPoolExecutor) -> None:
 
     for item_path in staging.iterdir():
         if item_path.is_dir():
-            executor.submit(submit_upload, item_path)
+            _ = executor.submit(submit_upload, item_path)
 
 
 def submit_upload(item_path: Path) -> None:
@@ -87,7 +87,7 @@ class UploadEventHandler(FileSystemEventHandler):
         self.executor: ThreadPoolExecutor = concurrent.futures.ThreadPoolExecutor(max_workers=3)
 
         self._stop_event: threading.Event = threading.Event()
-        self._scan_thread = threading.Thread(target=self._scan_loop, daemon=True)
+        self._scan_thread: threading.Thread = threading.Thread(target=self._scan_loop, daemon=True)
         scan_staging_directory(self.executor)
 
 

@@ -280,7 +280,7 @@ def get_size(files: dict[str, str]) -> int:
 
 def get_files_to_upload(path: Path, item: Item, uploaded_files: dict[str, str] | None = None) -> dict[str, str]:
     files: dict[str, str] = {}
-    for dirpath, dirnames, filenames in os.walk(str(path)):
+    for dirpath, _, filenames in os.walk(str(path)):
         for f in filenames:
             fp = os.path.join(dirpath, f)
             # skip if it is symbolic link

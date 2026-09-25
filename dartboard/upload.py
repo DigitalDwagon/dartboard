@@ -3,6 +3,7 @@ import json
 import logging
 import os.path
 import shutil
+import threading
 from pathlib import Path
 import re
 import time
@@ -17,21 +18,23 @@ from dartboard.__version__ import version
 
 # the number of times that an item (keyed by identifier) has failed to upload
 item_failures: dict[str, int] = {}
+item_failures_lock: threading.Lock = threading.Lock()
 
 def _failed_item(identifier: str):
-    if config.max_retries < 0 or item_failures.get(identifier, 0) < config.max_retries:
-        return
+    with item_failures_lock:
+        if config.max_retries < 0 or item_failures.get(identifier, 0) < config.max_retries:
+            return
 
-    logging.error(f"Item {identifier} has failed to upload {item_failures.get(identifier, 0)} times. Marking it failed!")
+        logging.error(f"Item {identifier} has failed to upload {item_failures.get(identifier, 0)} times. Marking it failed!")
 
     staging_dir = Path(config.staging_directory)
     failure_dir = Path(config.failure_directory)
     item_dir = staging_dir / identifier
 
-    if not item_dir.exists() and not item_dir.is_dir():
+    if not item_dir.exists() or not item_dir.is_dir():
         raise RuntimeError("Trying to fail an item, but the item path does not exist or is not a directory?")
 
-    shutil.move(staging_dir, failure_dir)
+    shutil.move(item_dir, failure_dir / item_dir.name)
 
 
 def _ia_upload(item: Item, files: dict[str, str], metadata: dict[str, str | list[str]], headers: dict[str, str]) -> None:
@@ -60,7 +63,8 @@ def _ia_upload(item: Item, files: dict[str, str], metadata: dict[str, str | list
                              access_key=config.s3_key,
                              secret_key=config.s3_secret)
     except Exception:
-        item_failures[item.identifier] = item_failures.get(item.identifier, 0) + 1
+        with item_failures_lock:
+            item_failures[item.identifier] = item_failures.get(item.identifier, 0) + 1
         _failed_item(item.identifier)
 
         logging.exception("Exception raised during item.upload()")
@@ -116,7 +120,7 @@ def _handle_uploaded_file(itempath: Path, filepath: str, identifier: str)-> None
         logging.info(f"\tDry run - skipping move")
         return
     try:
-        os.rename(src, done_path)
+        shutil.move(src, done_path)
     except FileNotFoundError:
         # log at debug so we don't spam ERROR for expected missing cleanup files
         logging.debug(f"File to move not found: {src}")
@@ -234,7 +238,6 @@ def upload(path: Path) -> bool:
         if tasks:
             logging.info(f"-> Found a derive task ({tasks.pop().task_id}) already running for {identifier} - see https://archive.org/history/{identifier}")
         else:
-            ""
             item.derive()
 
     # Now that we are done, the item meta and uploader meta should be cleaned up with the uploaded files
@@ -347,22 +350,7 @@ def get_identifier(path: Path) -> str | None:
 
 def load_meta_info(path: Path) -> tuple[dict[str, str | list[str]], UploaderMeta]:
     metadata = {}
-    settings: UploaderMeta = UploaderMeta()
-
-    try:
-        with open(path / "__ia_meta.json", "r") as meta_file:
-            raw_metadata = meta_file.read()
-            if raw_metadata:
-                metadata = json.loads(raw_metadata)
-
-            if settings.set_scanner:
-                if "scanner" not in metadata or not metadata["scanner"]:
-                    metadata["scanner"] = []
-                if isinstance(metadata["scanner"], str):
-                    metadata["scanner"] = [metadata["scanner"]]
-                metadata["scanner"].append(f"dartboard (v{version})")
-    except FileNotFoundError:
-        pass
+    settings: UploaderMeta | None = None
 
     try:
         with open(os.path.join(path, "__uploader_meta.json"), "r") as meta_file:
@@ -372,7 +360,23 @@ def load_meta_info(path: Path) -> tuple[dict[str, str | list[str]], UploaderMeta
     except FileNotFoundError:
         pass
 
+    try:
+        with open(path / "__ia_meta.json", "r") as meta_file:
+            raw_metadata = meta_file.read()
+            if raw_metadata:
+                metadata = json.loads(raw_metadata)
 
+            if settings and settings.set_scanner:
+                if "scanner" not in metadata or not metadata["scanner"]:
+                    metadata["scanner"] = []
+                if isinstance(metadata["scanner"], str):
+                    metadata["scanner"] = [metadata["scanner"]]
+                metadata["scanner"].append(f"dartboard (v{version})")
+    except FileNotFoundError:
+        pass
+
+    if not settings:
+        settings = UploaderMeta()
 
     return metadata, settings
 
@@ -385,7 +389,7 @@ def wait_for_item(identifier: str) -> bool:
             return True
 
         logging.info(msg=f"Waiting for the item to be created... ({tries_left} tries left)  ...")
-        if tries < 395:
+        if tries_left < 395:
             logging.info(msg=f"Is IA overloaded? Still waiting for item to be created ({tries_left} tries left)  ...")
         time.sleep(30)
         item = ia.get_item(identifier)

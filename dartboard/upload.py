@@ -134,10 +134,6 @@ def upload(path: Path) -> bool:
         return False
     logging.info(f"Identifier: {identifier} - this item will try to upload to https://archive.org/details/{identifier}")
 
-    if not has_files_to_upload(path):
-        logging.info(f"Directory has no files to upload.")
-        return False
-
     metadata, settings = load_meta_info(path)
     item = cache.get_item(identifier)
 
@@ -153,6 +149,10 @@ def upload(path: Path) -> bool:
     # absolute path on disk -> relative path in IA item
     files_to_upload: dict[str, str] = get_files_to_upload(path, item)
     uploaded_files: dict[str, str] = {}
+
+    if not files_to_upload:
+        logging.info(f"Directory has no files to upload.")
+        return False
 
     logging.info(f"Files to upload: {json.dumps(files_to_upload, indent=4)}")
 
@@ -313,22 +313,6 @@ def get_files_to_upload(path: Path, item: ia.Item, uploaded_files: dict[str, str
 
     return files
 
-def has_files_to_upload(path: Path, uploaded_files: dict[str, str] | None = None):
-    for dirpath, dirnames, filenames in os.walk(path):
-        for f in filenames:
-            if f == "__ia_meta.json" or f == "__uploader_meta.json":
-                continue
-            fp = os.path.join(dirpath, f)
-            # skip if it is symbolic link or directory
-            if not os.path.islink(fp) and not os.path.isdir(fp):
-                if uploaded_files:
-                    rel_path = os.path.relpath(fp, path)
-                    rel_path = rel_path.replace(os.path.sep, "/")
-                    abs_path = os.path.abspath(fp)
-                    if abs_path in uploaded_files:
-                        continue
-                return True
-    return False
 
 def get_identifier(path: Path) -> str | None:
     if not path.is_dir():

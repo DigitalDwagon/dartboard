@@ -14,11 +14,12 @@ requires-python = ">=3.10"
 dependencies = [
     "internetarchive>=5.0.3",
     "dataclasses-json",
-    "watchdog"
+    "watchdog",
 ]
 
 [dependency-groups]
 dev = [
+    "basedpyright>=1.40.1",
     "pytest"
 ]
 

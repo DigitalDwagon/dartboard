@@ -32,9 +32,12 @@ def load_config(config_path: str) -> None:
     elif os.path.exists(os.path.expanduser("~/.config/internetarchive/ia.ini")):
         with open(os.path.expanduser("~/.config/internetarchive/ia.ini"), "r") as f:
             credentials = f.read()
+            s3_key = re.search("access = ([^\n]+)", credentials)
+            s3_secret = re.search("secret = ([^\n]+)", credentials)
+
             config_dict = {
-                "s3_key": re.search("access = ([^\n]+)", credentials).group(1),
-                "s3_secret": re.search("secret = ([^\n]+)", credentials).group(1)
+                "s3_key": None if not s3_key else s3_key.group(1),
+                "s3_secret": None if not s3_secret else s3_secret.group(1)
             }
     else:
         print(

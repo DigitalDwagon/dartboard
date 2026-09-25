@@ -97,9 +97,9 @@ class UploadEventHandler(FileSystemEventHandler):
 
     @override
     def on_any_event(self, event: FileSystemEvent) -> None:
-        path = event.dest_path
+        path = str(event.dest_path)
         if not path:
-            path = event.src_path
+            path = str(event.src_path)
         item_folder = find_item_folder(path)
         if not item_folder:
             return

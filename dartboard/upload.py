@@ -34,7 +34,7 @@ def _failed_item(identifier: str):
     if not item_dir.exists() or not item_dir.is_dir():
         raise RuntimeError("Trying to fail an item, but the item path does not exist or is not a directory?")
 
-    shutil.move(item_dir, failure_dir / item_dir.name)
+    _ = shutil.move(item_dir, failure_dir / item_dir.name)
 
 
 def _ia_upload(item: Item, files: dict[str, str], metadata: dict[str, str | list[str]], headers: dict[str, str]) -> None:
@@ -64,8 +64,9 @@ def _ia_upload(item: Item, files: dict[str, str], metadata: dict[str, str | list
                              secret_key=config.s3_secret)
     except Exception:
         with item_failures_lock:
-            item_failures[item.identifier] = item_failures.get(item.identifier, 0) + 1
-        _failed_item(item.identifier)
+            identifier = str(item.identifier)
+            item_failures[identifier] = item_failures.get(identifier, 0) + 1
+        _failed_item(identifier)
 
         logging.exception("Exception raised during item.upload()")
         raise
@@ -89,41 +90,43 @@ def _ia_upload(item: Item, files: dict[str, str], metadata: dict[str, str | list
     except Exception:
         logging.debug("Failed to log upload result cleanly", exc_info=True)
 
-def _handle_uploaded_file(itempath: Path, filepath: str, identifier: str)-> None:
+def _handle_uploaded_file(itempath: Path, filepath: str | Path, identifier: str) -> None:
     # filepath may be an absolute path (normal uploads) or a relative path
     # (cleanup calls pass just the filename like "__ia_meta.json"). Resolve it
     # relative to the itempath when necessary.
-    src = filepath if os.path.isabs(filepath) else os.path.join(itempath, filepath)
+    fp = Path(filepath)
+    src_path = fp if fp.is_absolute() else (itempath / fp)
 
     if config.delete_after_upload:
         if config.dry_run:
-            logging.info(f"Dry run - skipping delete of {src}")
+            logging.info(f"Dry run - skipping delete of {src_path}")
             return
         try:
-            os.remove(src)
-            logging.info(f"Deleted file {src} after upload.")
+            src_path.unlink()
+            logging.info(f"Deleted file {src_path} after upload.")
         except FileNotFoundError:
-            logging.debug(f"File to delete not found: {src}")
+            logging.debug(f"File to delete not found: {src_path}")
         return
 
-    rel = os.path.relpath(src, itempath)
-    done_path = os.path.join(os.path.join(config.done_directory, identifier), rel)
-    done_dir = os.path.dirname(done_path)
-    if not os.path.exists(done_dir):
+    # compute relative path and destination
+    rel = os.path.relpath(str(src_path), str(itempath))
+    done_path = Path(config.done_directory) / identifier / rel
+    done_dir = done_path.parent
+    if not done_dir.exists():
         logging.info(f"Creating directory {done_dir}...")
         if not config.dry_run:
-            os.makedirs(done_dir)
+            done_dir.mkdir(parents=True, exist_ok=True)
         else:
             logging.info(f"\tDry run - skipping directory creation")
-    logging.info(f"Moving {src} to {done_path} after upload...")
+    logging.info(f"Moving {src_path} to {done_path} after upload...")
     if config.dry_run:
         logging.info(f"\tDry run - skipping move")
         return
     try:
-        shutil.move(src, done_path)
+        _ = shutil.move(str(src_path), str(done_path))
     except FileNotFoundError:
         # log at debug so we don't spam ERROR for expected missing cleanup files
-        logging.debug(f"File to move not found: {src}")
+        logging.debug(f"File to move not found: {src_path}")
 
 
 def upload(path: Path) -> bool:
@@ -236,14 +239,14 @@ def upload(path: Path) -> bool:
         logging.info(f"Deriving {identifier}...")
         tasks = ia.get_tasks(identifier, {"cmd":"derive.php", "history":"0"}, archive_session=cache.session)
         if tasks:
-            logging.info(f"-> Found a derive task ({tasks.pop().task_id}) already running for {identifier} - see https://archive.org/history/{identifier}")
+            logging.info(f"-> Found a derive task ({tasks.pop().task_id}) already running for {identifier} - see https://archive.org/history/{identifier}")  # pyright: ignore[reportUnknownMemberType, reportAttributeAccessIssue] the IA library sets .task_id directly off the API response without defining it as a param, causing this pyright error
         else:
-            item.derive()
+            _ = item.derive()
 
     # Now that we are done, the item meta and uploader meta should be cleaned up with the uploaded files
     try:
-        _handle_uploaded_file(path, "__ia_meta.json", identifier)
-        _handle_uploaded_file(path, "__uploader_meta.json", identifier)
+        _handle_uploaded_file(path, Path("__ia_meta.json"), identifier)
+        _handle_uploaded_file(path, Path("__uploader_meta.json"), identifier)
     except Exception:
         logging.exception("Exception cleaning up __ files: ")
 
@@ -253,7 +256,7 @@ def upload(path: Path) -> bool:
         logging.info("\tDry run - skipping directory removals")
     else:
         # Walk bottom-up so child directories are removed before parents
-        for dirpath, dirnames, filenames in os.walk(path, topdown=False):
+        for dirpath, _, _ in os.walk(str(path), topdown=False):
             try:
                 if not os.listdir(dirpath):
                     os.rmdir(dirpath)
@@ -267,13 +270,17 @@ def upload(path: Path) -> bool:
 
 def get_size(files: dict[str, str]) -> int:
     size = 0
-    for file in files:
-        size += os.path.getsize(file)
+    for filepath in files.keys():
+        try:
+            size += os.path.getsize(filepath)
+        except OSError:
+            logging.debug(f"Failed to stat file {filepath}", exc_info=True)
     return size
 
-def get_files_to_upload(path: Path, item: ia.Item, uploaded_files: dict[str, str] | None = None) -> dict[str, str]:
+
+def get_files_to_upload(path: Path, item: Item, uploaded_files: dict[str, str] | None = None) -> dict[str, str]:
     files: dict[str, str] = {}
-    for dirpath, dirnames, filenames in os.walk(path):
+    for dirpath, dirnames, filenames in os.walk(str(path)):
         for f in filenames:
             fp = os.path.join(dirpath, f)
             # skip if it is symbolic link
@@ -281,35 +288,50 @@ def get_files_to_upload(path: Path, item: ia.Item, uploaded_files: dict[str, str
                 continue
 
             # get the relative path
-            rel_path = os.path.relpath(fp, path)
-            rel_path = rel_path.replace(os.path.sep, "/")
+            rel_path = os.path.relpath(fp, str(path)).replace(os.path.sep, "/")
             abs_path = os.path.abspath(fp)
             files[abs_path] = rel_path
 
     # remove __ia_meta.json and __uploader_meta.json from the list
-    for path, destination in list(files.items()):
-        if destination == "__ia_meta.json" or destination == "__uploader_meta.json":
-            files.pop(path, None)
+    for filepath, destination in list(files.items()):
+        if destination in ("__ia_meta.json", "__uploader_meta.json"):
+            _ = files.pop(filepath, None)
 
     if not item.exists:
         return files
 
-    for path, destination in list(files.items()):
+    for filepath, destination in list(files.items()):
         # skip if already uploaded
-        if uploaded_files and path in uploaded_files:
-            files.pop(path, None)
+        if uploaded_files and filepath in uploaded_files:
+            _ = files.pop(filepath, None)
             continue
 
-        ia_file = next((file for file in item.files if file["name"] == destination), None)
+        ia_file = next((f for f in item.files if f.get("name") == destination), None)
 
         if ia_file:
-            if ia_file["md5"] == hashlib.md5(open(path, "rb").read()).hexdigest():
-                logging.info(f"{destination} already exists in {item.identifier}. Skipping...")
+            md5_remote = ia_file.get("md5")
+            if not md5_remote:
+                # TODO - this *should* never happen, but what to do here? Probably should just fail the upload
+                #        since IA files should always have a hash
+                logging.info(f"{destination} already exists in {str(item.identifier)}. Skipping (no md5 to compare)...")
+                _ = files.pop(filepath, None)
+                continue
+
+            try:
+                with open(filepath, "rb") as f:
+                    # TODO - don't read the whole file at once, these are big files
+                    md5_local = hashlib.md5(f.read()).hexdigest()
+            except Exception:
+                logging.debug(f"Failed to read local file {filepath} for hashing", exc_info=True)
+                raise
+
+            if md5_remote == md5_local:
+                logging.info(f"{destination} already exists in {str(item.identifier)}. Skipping...")
                 # remove the file from the list
-                files.pop(path, None)
+                _ = files.pop(filepath, None)
                 continue
             else:
-                raise Exception(f"{destination} already exists in {item.identifier}, but the hashes don't match.")
+                raise Exception(f"{destination} already exists in {str(item.identifier)}, but the hashes don't match.")
 
     return files
 
@@ -337,10 +359,12 @@ def load_meta_info(path: Path) -> tuple[dict[str, str | list[str]], UploaderMeta
     settings: UploaderMeta | None = None
 
     try:
-        with open(os.path.join(path, "__uploader_meta.json"), "r") as meta_file:
-            settings_raw = meta_file.read()
-            if settings_raw:
-                settings: UploaderMeta =  UploaderMeta.from_json(settings_raw)
+        meta_path = Path(path) / "__uploader_meta.json"
+        if meta_path.exists():
+            with meta_path.open("r") as meta_file:
+                settings_raw = meta_file.read()
+                if settings_raw:
+                    settings = UploaderMeta.from_json(settings_raw)
     except FileNotFoundError:
         pass
 

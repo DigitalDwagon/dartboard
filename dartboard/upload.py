@@ -319,8 +319,7 @@ def get_files_to_upload(path: Path, item: Item, uploaded_files: dict[str, str] |
 
             try:
                 with open(filepath, "rb") as f:
-                    # TODO - don't read the whole file at once, these are big files
-                    md5_local = hashlib.md5(f.read()).hexdigest()
+                    md5_local = hashlib.file_digest(f, "md5").hexdigest()
             except Exception:
                 logging.debug(f"Failed to read local file {filepath} for hashing", exc_info=True)
                 raise

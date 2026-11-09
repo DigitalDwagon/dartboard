@@ -12,6 +12,7 @@ class Config:
     delete_after_upload: bool = False # Delete files after upload
 
     # DAEMON MODE SETTINGS:
+    daemon_mode: bool = False
     staging_directory: str = "./dartboard-staging"
     failure_directory: str = "./dartboard-failed"
     done_directory: str = "./dartboard-done"

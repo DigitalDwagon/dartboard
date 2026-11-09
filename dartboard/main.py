@@ -48,6 +48,8 @@ def main():
     if args.dry_run:
         config.dry_run = True
 
+    config.daemon_mode = config.daemon_mode or args.daemon
+
     cache.session = ia.get_session({"s3": {"access": config.s3_key, "secret": config.s3_secret}})
 
     if args.path and not args.daemon:

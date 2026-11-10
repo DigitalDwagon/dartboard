@@ -9,7 +9,7 @@ from typing import override
 from watchdog.events import FileSystemEventHandler, FileSystemEvent
 
 from dartboard.config import config
-from dartboard.upload import upload
+from dartboard.upload import DartboardItem
 
 in_progress_items: set[str] = set()
 
@@ -61,26 +61,28 @@ def scan_staging_directory(executor: ThreadPoolExecutor) -> None:
 
 
 def submit_upload(item_path: Path) -> None:
+    item_key = str(item_path.absolute())
     with lock:
-        if str(item_path.absolute()) in in_progress_items:
+        if item_key in in_progress_items:
             return
-        in_progress_items.add(str(item_path.absolute()))
+        in_progress_items.add(item_key)
 
-    retries = 0
-    while item_path.exists() and item_path.is_dir() and retries < 2:
-        retries += 1
-        # Do this in a loop to pick up files uploaded between the end of the "file upload" part of the upload starting
-        # while the metadata changes, derive task, etc are being completed.
-        # Limited to 2x in case there is some infinite loop somewhere.
-        logging.info(f"Starting upload for {item_path} in {config.start_delay}s...")
-        time.sleep(config.start_delay)
-        result = upload(item_path.absolute())
+    try:
+        retries = 0
+        while item_path.exists() and item_path.is_dir() and retries < 2:
+            retries += 1
+            # Do this in a loop to pick up files uploaded between the end of the "file upload" part of the upload starting
+            # while the metadata changes, derive task, etc are being completed.
+            # Limited to 2x in case there is some infinite loop somewhere.
+            logging.info(f"Starting upload for {item_path} in {config.start_delay}s...")
+            time.sleep(config.start_delay)
+            result = DartboardItem(path=item_path.absolute()).upload()
 
-        if not result:
-            raise RuntimeError(f"Upload for {item_path!r} failed.")
-
-    with lock:
-        in_progress_items.remove(str(item_path.absolute()))
+            if not result:
+                raise RuntimeError(f"Upload for {item_path!r} failed.")
+    finally:
+        with lock:
+            in_progress_items.discard(item_key)
 
 class UploadEventHandler(FileSystemEventHandler):
     def __init__(self):
@@ -105,4 +107,3 @@ class UploadEventHandler(FileSystemEventHandler):
             return
         _ = self.executor.submit(submit_upload, item_folder)
         # self.executor.submit(upload())
-

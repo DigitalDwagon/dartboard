@@ -1,3 +1,4 @@
+import errno
 import hashlib
 import json
 import logging
@@ -51,7 +52,7 @@ class DartboardItem:
         :return:
         """
         rel_path = file.absolute().relative_to(self.path)
-        destination = parent / rel_path
+        destination = parent / self.identifier / rel_path
 
         if config.dry_run:
             logging.info(f"Dry run: Skipped moving {file} to {destination}")
@@ -220,7 +221,13 @@ class DartboardItem:
                     continue
 
                 logging.info(f"Cleanup: Removing empty directory {directory}")
-                directory.rmdir()
+                try:
+                    directory.rmdir()
+                except OSError as error:
+                    if error.errno in (errno.ENOTEMPTY, errno.EEXIST) or getattr(error, "winerror", None) == 145:
+                        logging.info(f"Skipping directory that is no longer empty: {directory}")
+                        continue
+                    raise
 
 
     def _get_metadata_changes(self, metadata: dict[str, str | list[str]]) -> dict[str, str | list[str]]:
@@ -254,7 +261,7 @@ class DartboardItem:
                 metadata_changes[key] = metadata[key]
         return metadata_changes
 
-    def upload(self):
+    def upload(self) -> bool:
         logging.info(f"Uploading {self.path}...")
         logging.info(f"Identifier: {self.identifier} - this item will try to upload to https://archive.org/details/{self.identifier}")
 
@@ -268,6 +275,12 @@ class DartboardItem:
 
         files_to_upload = self._get_files_to_upload()
         headers: dict[str, str | list[str]] = {}
+
+        if not files_to_upload and config.fast:
+            self.item_exists = cache.get_item(self.identifier).exists
+
+        if not files_to_upload and not self.item_exists:
+            raise RuntimeError("There are no files to upload and the item does not exist, aborting.")
 
         if settings.send_size_hint and not self.item_exists:
             headers["x-archive-size-hint"] = str(self._calculate_size_hint(files_to_upload))
@@ -319,3 +332,4 @@ class DartboardItem:
         self._cleanup_empty_directories()
 
         logging.info(f"Success! Upload complete - {self.identifier} is now available at https://archive.org/details/{self.identifier}")
+        return True

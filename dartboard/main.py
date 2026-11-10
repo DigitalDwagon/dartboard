@@ -4,6 +4,7 @@ import logging
 import os.path
 import re
 import time
+from pathlib import Path
 import internetarchive as ia
 
 from watchdog.observers import Observer
@@ -12,7 +13,7 @@ from dartboard import cache
 import dartboard
 from dartboard.__version__ import version
 from dartboard.config import Config, config, load_config
-from dartboard.upload import upload
+from dartboard.upload import DartboardItem
 from dartboard.watch import UploadEventHandler
 
 def main():
@@ -53,7 +54,7 @@ def main():
     cache.session = ia.get_session({"s3": {"access": config.s3_key, "secret": config.s3_secret}})
 
     if args.path and not args.daemon:
-        upload(args.path)
+        DartboardItem(path=Path(args.path)).upload()
     if args.daemon:
         event_handler = UploadEventHandler()
         observer = Observer()

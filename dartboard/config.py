@@ -10,6 +10,7 @@ class Config:
 
     dry_run: bool = False # Don't upload. Not compatible with daemon mode.
     delete_after_upload: bool = False # Delete files after upload
+    fast: bool = False # Fast mode
 
     # DAEMON MODE SETTINGS:
     daemon_mode: bool = False

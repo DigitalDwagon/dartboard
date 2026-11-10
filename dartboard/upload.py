@@ -4,13 +4,13 @@ import logging
 import os
 import re
 import shutil
-from marshal import version
 from pathlib import Path
 
 import requests
 
 import dartboard
 from dartboard import cache
+from dartboard.__version__ import version
 from dartboard.config import config
 from dartboard.items import UploaderMeta
 
@@ -34,7 +34,7 @@ class DartboardItem:
         if not path.is_dir():
             raise ValueError(f"Provided item path ({path}) is not a directory.")
 
-        self.path: Path = path
+        self.path: Path = path.absolute()
         self.identifier: str = self._detect_identifier()
 
         self.item_exists: bool = False
@@ -50,7 +50,7 @@ class DartboardItem:
         :param parent: The new parent directory of the file
         :return:
         """
-        rel_path = file.relative_to(self.path)
+        rel_path = file.absolute().relative_to(self.path)
         destination = parent / rel_path
 
         if config.dry_run:
@@ -58,6 +58,7 @@ class DartboardItem:
             return
 
         logging.info(f"Moving {str(file)} to {str(destination)}")
+        destination.parent.mkdir(parents=True, exist_ok=True)
         _ = shutil.move(str(file), str(destination))
 
     def _fail_file(self, file: Path):
@@ -137,8 +138,8 @@ class DartboardItem:
 
                 if md5_remote == md5_local:
                     logging.info(f"{destination} already exists in {self.identifier}. Skipping...")
-                    # TODO the file should be treated like an uploaded file (since it was!)
                     _ = files.pop(filepath, None)
+                    self._finish_file(Path(filepath))
                     continue
                 else:
                     logging.error(
@@ -298,7 +299,7 @@ class DartboardItem:
             self._finish_file(Path(local_path))
 
         # Yay, upload complete! Post upload tasks...
-        if not config.fast:
+        if not config.fast and not config.dry_run:
             # Fast uploads assume there are no after the fact metadata changes, etc.
             if settings.set_upload_state:
                 metadata["upload_state"] = "uploaded"
